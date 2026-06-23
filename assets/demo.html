@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PP-OCRv6 · Rust OCR demo</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --fg:#e6e9ef; --mut:#9aa4b2; --acc:#4f8cff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .tag { color:var(--mut); font-size:12px; }
+  header a { margin-left:auto; color:var(--acc); text-decoration:none; font-size:13px; }
+  main { display:grid; grid-template-columns: 320px 1fr; gap:0; height:calc(100vh - 59px); }
+  .controls { padding:18px 20px; border-right:1px solid var(--line); overflow:auto; }
+  .controls label { display:block; font-size:12px; color:var(--mut); margin:14px 0 4px; }
+  select, input[type=number] { width:100%; background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  button { margin-top:18px; width:100%; background:var(--acc); color:#fff; border:0; border-radius:8px; padding:11px; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .drop { margin-top:6px; border:1.5px dashed var(--line); border-radius:10px; padding:18px; text-align:center; color:var(--mut); cursor:pointer; }
+  .drop.over { border-color:var(--acc); color:var(--fg); }
+  .view { position:relative; overflow:auto; padding:18px; }
+  canvas { max-width:100%; border:1px solid var(--line); border-radius:8px; background:#000; }
+  .out { margin-top:16px; }
+  .out h2 { font-size:13px; color:var(--mut); margin:0 0 8px; font-weight:600; }
+  .text { white-space:pre-wrap; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; min-height:48px; }
+  table { width:100%; border-collapse:collapse; margin-top:12px; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:600; }
+  .meta { color:var(--mut); font-size:12px; margin-top:8px; }
+  .err { color:#ff6b6b; margin-top:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PP-OCRv6 OCR</h1>
+  <span class="tag">pure-Rust · tract · embedded models</span>
+  <a href="/docs">API docs →</a>
+</header>
+<main>
+  <section class="controls">
+    <div class="drop" id="drop">Click or drop an image</div>
+    <input type="file" id="file" accept="image/*" hidden />
+
+    <label>Detection model</label>
+    <select id="det"></select>
+    <label>Recognition model</label>
+    <select id="rec"></select>
+
+    <div class="row">
+      <div><label>box_thresh</label><input type="number" id="box_thresh" step="0.05" placeholder="default" /></div>
+      <div><label>thresh</label><input type="number" id="thresh" step="0.05" placeholder="default" /></div>
+    </div>
+    <div class="row">
+      <div><label>unclip_ratio</label><input type="number" id="unclip_ratio" step="0.1" placeholder="default" /></div>
+      <div><label>limit_side_len</label><input type="number" id="limit_side_len" step="32" placeholder="960" /></div>
+    </div>
+    <div class="row">
+      <div><label>min_rec_score</label><input type="number" id="min_rec_score" step="0.05" placeholder="0" /></div>
+    </div>
+
+    <button id="run" disabled>Run OCR</button>
+    <div class="err" id="err"></div>
+  </section>
+
+  <section class="view">
+    <canvas id="canvas"></canvas>
+    <div class="out">
+      <h2>Extracted text</h2>
+      <div class="text" id="text"></div>
+      <div class="meta" id="meta"></div>
+      <table id="lines"><thead><tr><th>#</th><th>text</th><th>det</th><th>rec</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+let imgBitmap = null, fileBlob = null;
+
+async function loadModels() {
+  const r = await fetch('/v1/models'); const j = await r.json();
+  const det = $('#det'), rec = $('#rec');
+  j.detection.forEach(m => det.add(new Option(m.id, m.id)));
+  j.recognition.forEach(id => rec.add(new Option(id, id)));
+  // default to medium if present
+  [['#det', j.detection.map(m=>m.id)], ['#rec', j.recognition]].forEach(([sel,ids])=>{
+    const m = ids.find(x=>x.includes('medium')) || ids[0];
+    if (m) $(sel).value = m;
+  });
+}
+loadModels();
+
+function setFile(f) {
+  if (!f) return;
+  fileBlob = f;
+  const url = URL.createObjectURL(f);
+  const im = new Image();
+  im.onload = () => { imgBitmap = im; draw([]); $('#run').disabled = false; };
+  im.src = url;
+}
+$('#drop').onclick = () => $('#file').click();
+$('#file').onchange = e => setFile(e.target.files[0]);
+['dragover','dragenter'].forEach(ev=>$('#drop').addEventListener(ev,e=>{e.preventDefault();$('#drop').classList.add('over');}));
+['dragleave','drop'].forEach(ev=>$('#drop').addEventListener(ev,e=>{e.preventDefault();$('#drop').classList.remove('over');}));
+$('#drop').addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
+
+function draw(lines) {
+  const c = $('#canvas'), ctx = c.getContext('2d');
+  c.width = imgBitmap.naturalWidth; c.height = imgBitmap.naturalHeight;
+  ctx.drawImage(imgBitmap, 0, 0);
+  ctx.lineWidth = Math.max(2, c.width/400); ctx.strokeStyle = '#4f8cff'; ctx.fillStyle = 'rgba(79,140,255,.12)';
+  ctx.font = `${Math.max(12,c.width/60)}px system-ui`;
+  lines.forEach((l,i) => {
+    const p = l.points; ctx.beginPath(); ctx.moveTo(p[0][0],p[0][1]);
+    for (let k=1;k<4;k++) ctx.lineTo(p[k][0],p[k][1]);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#4f8cff'; ctx.fillText(i+1, p[0][0]+2, p[0][1]-2); ctx.fillStyle = 'rgba(79,140,255,.12)';
+  });
+}
+
+function qs() {
+  const p = new URLSearchParams();
+  p.set('det_model', $('#det').value); p.set('rec_model', $('#rec').value);
+  ['box_thresh','thresh','unclip_ratio','limit_side_len','min_rec_score'].forEach(k=>{
+    const v = $('#'+k).value; if (v !== '') p.set(k, v);
+  });
+  return p.toString();
+}
+
+$('#run').onclick = async () => {
+  if (!fileBlob) return;
+  $('#err').textContent = ''; $('#run').disabled = true; $('#run').textContent = 'Running…';
+  try {
+    const r = await fetch('/v1/ocr?'+qs(), { method:'POST', body: fileBlob });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    draw(j.lines);
+    $('#text').textContent = j.text || '(no text)';
+    $('#meta').textContent = `${j.num_lines} lines · ${j.elapsed_ms} ms · ${j.det_model} + ${j.rec_model}`;
+    const tb = $('#lines tbody'); tb.innerHTML = '';
+    j.lines.forEach((l,i)=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${i+1}</td><td>${l.text.replace(/</g,'&lt;')}</td><td>${l.det_score.toFixed(2)}</td><td>${l.rec_score.toFixed(2)}</td>`;
+      tb.appendChild(tr);
+    });
+  } catch (e) { $('#err').textContent = e.message; }
+  $('#run').disabled = false; $('#run').textContent = 'Run OCR';
+};
+</script>
+</body>
+</html>
