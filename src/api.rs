@@ -1,9 +1,9 @@
 //! HTTP layer: routes, request params, JSON responses.
 
-use crate::engine::{Engine, ParamOverrides};
+use crate::engine::{Engine, OcrMode, ParamOverrides};
 use axum::{
     body::Bytes,
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -25,6 +25,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
         .route("/v1/detect", post(detect))
         .route("/v1/recognize", post(recognize))
         .route("/v1/ocr", post(ocr))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(engine)
 }
 
@@ -58,23 +59,39 @@ async fn list_models(State(engine): State<Arc<Engine>>) -> Json<serde_json::Valu
 
 // ---------- shared helpers ----------
 
-fn pick(model: Option<String>, ids: &[String], kind: &str) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+fn pick(
+    model: Option<String>,
+    ids: &[String],
+    kind: &str,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
     match model {
         Some(m) => Ok(m),
         None if ids.len() == 1 => Ok(ids[0].clone()),
         None => Err(err(
             StatusCode::BAD_REQUEST,
-            format!("query param `{kind}` is required; available: {}", ids.join(", ")),
+            format!(
+                "query param `{kind}` is required; available: {}",
+                ids.join(", ")
+            ),
         )),
     }
 }
 
-fn decode_image(body: &Bytes) -> Result<image::DynamicImage, (StatusCode, Json<serde_json::Value>)> {
+fn decode_image(
+    body: &Bytes,
+) -> Result<image::DynamicImage, (StatusCode, Json<serde_json::Value>)> {
     if body.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "empty request body; POST raw image bytes"));
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "empty request body; POST raw image bytes",
+        ));
     }
-    image::load_from_memory(body)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, format!("could not decode image: {e}")))
+    image::load_from_memory(body).map_err(|e| {
+        err(
+            StatusCode::BAD_REQUEST,
+            format!("could not decode image: {e}"),
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -87,6 +104,7 @@ struct DetectQuery {
     unclip_ratio: Option<f32>,
     limit_side_len: Option<u32>,
     min_rec_score: Option<f32>,
+    mode: Option<String>,
 }
 
 impl DetectQuery {
@@ -97,6 +115,18 @@ impl DetectQuery {
             unclip_ratio: self.unclip_ratio,
             limit_side_len: self.limit_side_len,
         }
+    }
+}
+
+fn parse_mode(mode: Option<&str>) -> Result<OcrMode, (StatusCode, Json<serde_json::Value>)> {
+    match mode.unwrap_or("general") {
+        "general" | "raw" => Ok(OcrMode::General),
+        "document" | "doc" => Ok(OcrMode::Document),
+        "kenya_id" | "kenya-id" | "id" => Ok(OcrMode::KenyaId),
+        other => Err(err(
+            StatusCode::BAD_REQUEST,
+            format!("unknown mode '{other}'; available: general, document, kenya_id"),
+        )),
     }
 }
 
@@ -123,12 +153,20 @@ async fn detect(
     body: Bytes,
 ) -> impl IntoResponse {
     let ids = engine.det_ids();
-    let model = match pick(q.model.clone().or_else(|| q.det_model.clone()), &ids, "model") {
+    let model = match pick(
+        q.model.clone().or_else(|| q.det_model.clone()),
+        &ids,
+        "model",
+    ) {
         Ok(m) => m,
         Err(e) => return e.into_response(),
     };
     if !engine.has_det(&model) {
-        return err(StatusCode::NOT_FOUND, format!("unknown det model '{model}'; available: {}", ids.join(", "))).into_response();
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("unknown det model '{model}'; available: {}", ids.join(", ")),
+        )
+        .into_response();
     }
     let img = match decode_image(&body) {
         Ok(i) => i,
@@ -145,13 +183,28 @@ async fn detect(
 
     let (boxes, params) = match res {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("inference error: {e:#}")).into_response(),
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("task join error: {e}")).into_response(),
+        Ok(Err(e)) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("inference error: {e:#}"),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("task join error: {e}"),
+            )
+            .into_response()
+        }
     };
 
     let boxes_out: Vec<BoxOut> = boxes
         .iter()
-        .map(|b| BoxOut { points: quad_to_points(&b.points), score: b.score })
+        .map(|b| BoxOut {
+            points: quad_to_points(&b.points),
+            score: b.score,
+        })
         .collect();
 
     Json(serde_json::json!({
@@ -176,12 +229,20 @@ async fn recognize(
     body: Bytes,
 ) -> impl IntoResponse {
     let ids = engine.rec_ids();
-    let model = match pick(q.model.clone().or_else(|| q.rec_model.clone()), &ids, "model") {
+    let model = match pick(
+        q.model.clone().or_else(|| q.rec_model.clone()),
+        &ids,
+        "model",
+    ) {
         Ok(m) => m,
         Err(e) => return e.into_response(),
     };
     if !engine.has_rec(&model) {
-        return err(StatusCode::NOT_FOUND, format!("unknown rec model '{model}'; available: {}", ids.join(", "))).into_response();
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("unknown rec model '{model}'; available: {}", ids.join(", ")),
+        )
+        .into_response();
     }
     let img = match decode_image(&body) {
         Ok(i) => i,
@@ -200,8 +261,16 @@ async fn recognize(
             "model": model, "text": text, "score": score, "elapsed_ms": elapsed_ms
         }))
         .into_response(),
-        Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, format!("inference error: {e:#}")).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, format!("task join error: {e}")).into_response(),
+        Ok(Err(e)) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("inference error: {e:#}"),
+        )
+        .into_response(),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task join error: {e}"),
+        )
+        .into_response(),
     }
 }
 
@@ -222,7 +291,11 @@ async fn ocr(
 ) -> impl IntoResponse {
     let det_ids = engine.det_ids();
     let rec_ids = engine.rec_ids();
-    let det_model = match pick(q.det_model.clone().or_else(|| q.model.clone()), &det_ids, "det_model") {
+    let det_model = match pick(
+        q.det_model.clone().or_else(|| q.model.clone()),
+        &det_ids,
+        "det_model",
+    ) {
         Ok(m) => m,
         Err(e) => return e.into_response(),
     };
@@ -231,10 +304,18 @@ async fn ocr(
         Err(e) => return e.into_response(),
     };
     if !engine.has_det(&det_model) {
-        return err(StatusCode::NOT_FOUND, format!("unknown det model '{det_model}'")).into_response();
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("unknown det model '{det_model}'"),
+        )
+        .into_response();
     }
     if !engine.has_rec(&rec_model) {
-        return err(StatusCode::NOT_FOUND, format!("unknown rec model '{rec_model}'")).into_response();
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("unknown rec model '{rec_model}'"),
+        )
+        .into_response();
     }
     let img = match decode_image(&body) {
         Ok(i) => i,
@@ -243,20 +324,43 @@ async fn ocr(
     let (width, height) = (img.width(), img.height());
     let ov = q.overrides();
     let min_rec_score = q.min_rec_score.unwrap_or(0.0);
+    let mode = match parse_mode(q.mode.as_deref()) {
+        Ok(m) => m,
+        Err(e) => return e.into_response(),
+    };
 
     let start = Instant::now();
     let engine2 = engine.clone();
     let (d2, r2) = (det_model.clone(), rec_model.clone());
-    let res = tokio::task::spawn_blocking(move || engine2.ocr(&d2, &r2, &img, ov, min_rec_score)).await;
+    let res = tokio::task::spawn_blocking(move || {
+        engine2.ocr(&d2, &r2, &img, ov, min_rec_score, mode)
+    })
+    .await;
     let elapsed_ms = start.elapsed().as_millis();
 
     let (lines, params) = match res {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("inference error: {e:#}")).into_response(),
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("task join error: {e}")).into_response(),
+        Ok(Err(e)) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("inference error: {e:#}"),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("task join error: {e}"),
+            )
+            .into_response()
+        }
     };
 
-    let full_text = lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+    let full_text = lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let lines_out: Vec<LineOut> = lines
         .iter()
         .map(|l| LineOut {
@@ -270,6 +374,7 @@ async fn ocr(
     Json(serde_json::json!({
         "det_model": det_model,
         "rec_model": rec_model,
+        "mode": mode.as_str(),
         "image": { "width": width, "height": height },
         "params": {
             "thresh": params.thresh, "box_thresh": params.box_thresh,

@@ -48,6 +48,12 @@
     <select id="det"></select>
     <label>Recognition model</label>
     <select id="rec"></select>
+    <label>OCR mode</label>
+    <select id="mode">
+      <option value="general">general</option>
+      <option value="document">document</option>
+      <option value="kenya_id">kenya_id</option>
+    </select>
 
     <div class="row">
       <div><label>box_thresh</label><input type="number" id="box_thresh" step="0.05" placeholder="default" /></div>
@@ -89,8 +95,20 @@ async function loadModels() {
     const m = ids.find(x=>x.includes('medium')) || ids[0];
     if (m) $(sel).value = m;
   });
+  applyModePreset();
 }
 loadModels();
+
+function applyModePreset() {
+  if ($('#mode').value === 'general') {
+    $('#unclip_ratio').value = '';
+    $('#limit_side_len').value = '';
+  } else {
+    $('#unclip_ratio').value = '2.2';
+    $('#limit_side_len').value = '2048';
+  }
+}
+$('#mode').onchange = applyModePreset;
 
 function setFile(f) {
   if (!f) return;
@@ -123,6 +141,7 @@ function draw(lines) {
 function qs() {
   const p = new URLSearchParams();
   p.set('det_model', $('#det').value); p.set('rec_model', $('#rec').value);
+  p.set('mode', $('#mode').value);
   ['box_thresh','thresh','unclip_ratio','limit_side_len','min_rec_score'].forEach(k=>{
     const v = $('#'+k).value; if (v !== '') p.set(k, v);
   });
@@ -138,7 +157,7 @@ $('#run').onclick = async () => {
     if (j.error) throw new Error(j.error);
     draw(j.lines);
     $('#text').textContent = j.text || '(no text)';
-    $('#meta').textContent = `${j.num_lines} lines · ${j.elapsed_ms} ms · ${j.det_model} + ${j.rec_model}`;
+    $('#meta').textContent = `${j.num_lines} lines · ${j.elapsed_ms} ms · ${j.mode} · ${j.det_model} + ${j.rec_model}`;
     const tb = $('#lines tbody'); tb.innerHTML = '';
     j.lines.forEach((l,i)=>{
       const tr = document.createElement('tr');

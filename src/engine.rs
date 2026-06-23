@@ -10,7 +10,9 @@ use crate::embedded;
 use crate::geometry::Pt;
 use crate::postprocess::{db_postprocess, DetectedBox};
 use crate::preprocess::preprocess;
-use crate::recognize::{ctc_classes_ok, rec_preprocess, rectify_crop, Charset, REC_HEIGHT};
+use crate::recognize::{
+    ctc_classes_ok, rec_preprocess, rectify_crop, split_word_crops, Charset, REC_HEIGHT,
+};
 use anyhow::{Context, Result};
 use image::DynamicImage;
 use rayon::prelude::*;
@@ -109,6 +111,35 @@ pub struct Engine {
     rec: BTreeMap<String, Arc<RecModel>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OcrMode {
+    General,
+    Document,
+    KenyaId,
+}
+
+impl OcrMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OcrMode::General => "general",
+            OcrMode::Document => "document",
+            OcrMode::KenyaId => "kenya_id",
+        }
+    }
+
+    fn padded_crops(self) -> bool {
+        matches!(self, OcrMode::Document | OcrMode::KenyaId)
+    }
+
+    fn split_words(self) -> bool {
+        matches!(self, OcrMode::Document | OcrMode::KenyaId)
+    }
+
+    fn normalize_id_text(self) -> bool {
+        matches!(self, OcrMode::KenyaId)
+    }
+}
+
 /// Per-request detection overrides applied on top of yml defaults.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ParamOverrides {
@@ -178,7 +209,11 @@ impl Engine {
         let jobs: Vec<(Arc<RecModel>, u32)> = self
             .rec
             .values()
-            .flat_map(|m| crate::recognize::width_buckets().iter().map(move |&w| (m.clone(), w)))
+            .flat_map(|m| {
+                crate::recognize::width_buckets()
+                    .iter()
+                    .map(move |&w| (m.clone(), w))
+            })
             .collect();
         jobs.par_iter().for_each(|(m, w)| {
             if let Err(e) = m.compiled.plan_for(REC_HEIGHT, *w) {
@@ -225,7 +260,9 @@ impl Engine {
         let result = plan
             .run(tvec!(pre.tensor.clone().into()))
             .context("detection inference failed")?;
-        let view = result[0].to_array_view::<f32>().context("det output not f32")?;
+        let view = result[0]
+            .to_array_view::<f32>()
+            .context("det output not f32")?;
         let prob: Vec<f32> = view.iter().cloned().collect();
         anyhow::ensure!(prob.len() == net_w * net_h, "unexpected det output size");
         let boxes = db_postprocess(&prob, net_w, net_h, &pre, &params);
@@ -239,16 +276,18 @@ impl Engine {
             .get(rec_id)
             .with_context(|| format!("unknown rec model '{rec_id}'"))?
             .clone();
-        self.recognize_strip(&m, line)
+        self.recognize_strip_raw(&m, line)
     }
 
-    fn recognize_strip(&self, m: &RecModel, line: &image::RgbImage) -> Result<(String, f32)> {
+    fn recognize_strip_raw(&self, m: &RecModel, line: &image::RgbImage) -> Result<(String, f32)> {
         let (tensor, pad_w) = rec_preprocess(line);
         let plan = m.compiled.plan_for(REC_HEIGHT, pad_w)?;
         let result = plan
             .run(tvec!(tensor.into()))
             .context("recognition inference failed")?;
-        let view = result[0].to_array_view::<f32>().context("rec output not f32")?;
+        let view = result[0]
+            .to_array_view::<f32>()
+            .context("rec output not f32")?;
         let shape = view.shape();
         anyhow::ensure!(shape.len() == 3, "rec output rank != 3");
         let (t, c) = (shape[1], shape[2]);
@@ -256,6 +295,91 @@ impl Engine {
             .with_context(|| format!("charset/model class mismatch for {}", m.id))?;
         let probs: Vec<f32> = view.iter().cloned().collect();
         Ok(m.charset.ctc_decode(&probs, t, c))
+    }
+
+    fn recognize_strip(
+        &self,
+        m: &RecModel,
+        line: &image::RgbImage,
+        split_words: bool,
+    ) -> Result<(String, f32)> {
+        let (whole_text, whole_score) = self.recognize_strip_raw(m, line)?;
+        if !split_words || whole_text.contains(' ') {
+            return Ok((whole_text, whole_score));
+        }
+
+        let word_crops = split_word_crops(line);
+        if word_crops.is_empty() {
+            return Ok((whole_text, whole_score));
+        }
+
+        let mut words = Vec::with_capacity(word_crops.len());
+        let mut weighted_score = 0.0f32;
+        let mut total_chars = 0usize;
+        for crop in &word_crops {
+            let (word, score) = self.recognize_strip_raw(m, crop)?;
+            let word = word.trim().to_string();
+            if word.is_empty() {
+                return Ok((whole_text, whole_score));
+            }
+            let chars = word.chars().count().max(1);
+            weighted_score += score * chars as f32;
+            total_chars += chars;
+            words.push(word);
+        }
+
+        let segmented = words.join(" ");
+        let segmented_compact: String = segmented.chars().filter(|c| !c.is_whitespace()).collect();
+        let whole_compact: String = whole_text.chars().filter(|c| !c.is_whitespace()).collect();
+        let segmented_score = weighted_score / total_chars.max(1) as f32;
+
+        if segmented_compact.len() >= whole_compact.len().saturating_sub(2)
+            && segmented_score + 0.08 >= whole_score
+        {
+            Ok((segmented, segmented_score))
+        } else {
+            Ok((whole_text, whole_score))
+        }
+    }
+
+    fn normalize_line_text(text: &str) -> String {
+        let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let key = collapsed
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_uppercase();
+
+        let normalized = match key.as_str() {
+            "JAMHURIYAKENYA" | "JAMHURIYAUKENYA" | "JAMHURYAUKENYA" | "JAMHURDYAUKENYA" => {
+                Some("JAMHURI YA KENYA")
+            }
+            "REPUBLICOFKENYA" | "REPURLICOFKENYA" | "REPURLICOEKENYA" => Some("REPUBLIC OF KENYA"),
+            "SERIALNUMBER" => Some("SERIAL NUMBER"),
+            "SERIALNUMBER:" => Some("SERIAL NUMBER:"),
+            "IDNUMBER" => Some("ID NUMBER"),
+            "IDNUMBER:" => Some("ID NUMBER:"),
+            "FULLNAMES" | "FULNAMES" => Some("FULL NAMES"),
+            "FULLNAMES:" | "FULNAMES:" => Some("FULL NAMES:"),
+            "DATEOFBIRTH" | "DATEOEBIRTH" | "DATEOERIRTH" => Some("DATE OF BIRTH"),
+            "DISTRICTOFBIRTH" | "DISTRICTOEBIRTH" => Some("DISTRICT OF BIRTH"),
+            "PLACEOFISSUE" | "PLACEOEISSUE" => Some("PLACE OF ISSUE"),
+            "DATEOFISSUE" | "DATEOEISSUE" => Some("DATE OF ISSUE"),
+            _ => None,
+        };
+
+        if let Some(value) = normalized {
+            return value.to_string();
+        }
+
+        if collapsed.contains('.') {
+            let digits: String = collapsed.chars().filter(|c| c.is_ascii_digit()).collect();
+            if digits.len() == 8 {
+                return format!("{}.{}.{}", &digits[0..2], &digits[2..4], &digits[4..8]);
+            }
+        }
+
+        collapsed
     }
 
     /// Full pipeline: detect, rectify each box, recognize, in reading order.
@@ -266,6 +390,7 @@ impl Engine {
         img: &DynamicImage,
         ov: ParamOverrides,
         min_rec_score: f32,
+        mode: OcrMode,
     ) -> Result<(Vec<OcrLine>, DetParams)> {
         let rec = self
             .rec
@@ -294,8 +419,13 @@ impl Engine {
         let lines: Vec<OcrLine> = boxes
             .par_iter()
             .map(|b| -> Result<Option<OcrLine>> {
-                let crop = rectify_crop(&src, &b.points);
-                let (text, rec_score) = self.recognize_strip(&rec, &crop)?;
+                let crop = rectify_crop(&src, &b.points, mode.padded_crops());
+                let (text, rec_score) = self.recognize_strip(&rec, &crop, mode.split_words())?;
+                let text = if mode.normalize_id_text() {
+                    Self::normalize_line_text(&text)
+                } else {
+                    text
+                };
                 Ok(if text.is_empty() || rec_score < min_rec_score {
                     None
                 } else {

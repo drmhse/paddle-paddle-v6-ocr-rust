@@ -1,0 +1,18 @@
+[Unit]
+Description=PP-OCRv6 OCR server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ck
+Group=ck
+WorkingDirectory=/opt/ocr-servos
+Environment=RUST_LOG=info
+ExecStart=/opt/ocr-servos/ppocr-server --host 127.0.0.1 --port 3088 --plan-cache 16
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

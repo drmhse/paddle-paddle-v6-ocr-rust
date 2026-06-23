@@ -82,7 +82,8 @@ pub async fn openapi(State(engine): State<Arc<Engine>>) -> Json<serde_json::Valu
               det_param("box_thresh", "min box score (default: per-model)"),
               det_param("unclip_ratio", "box expansion (default: per-model)"),
               {"name": "limit_side_len", "in": "query", "required": false, "schema": {"type": "integer"}, "description": "resize bound, multiple of 32 (default 960)"},
-              det_param("min_rec_score", "drop lines below this recognition confidence (default 0)")
+              det_param("min_rec_score", "drop lines below this recognition confidence (default 0)"),
+              {"name": "mode", "in": "query", "required": false, "schema": {"type": "string", "enum": ["general", "document", "kenya_id"], "default": "general"}, "description": "OCR post-processing mode: general=raw, document=padded crops and word splitting, kenya_id=document plus Kenyan ID cleanup"}
             ],
             "responses": {"200": {"description": "extracted text + per-line boxes/scores"}}
           }
