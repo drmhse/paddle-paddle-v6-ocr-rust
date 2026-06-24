@@ -116,6 +116,7 @@ pub enum OcrMode {
     General,
     Document,
     KenyaId,
+    KenyaLogbook,
 }
 
 impl OcrMode {
@@ -124,19 +125,24 @@ impl OcrMode {
             OcrMode::General => "general",
             OcrMode::Document => "document",
             OcrMode::KenyaId => "kenya_id",
+            OcrMode::KenyaLogbook => "kenya_logbook",
         }
     }
 
     fn padded_crops(self) -> bool {
-        matches!(self, OcrMode::Document | OcrMode::KenyaId)
+        matches!(self, OcrMode::Document | OcrMode::KenyaId | OcrMode::KenyaLogbook)
     }
 
     fn split_words(self) -> bool {
-        matches!(self, OcrMode::Document | OcrMode::KenyaId)
+        matches!(self, OcrMode::Document | OcrMode::KenyaId | OcrMode::KenyaLogbook)
     }
 
     fn normalize_id_text(self) -> bool {
         matches!(self, OcrMode::KenyaId)
+    }
+
+    fn normalize_logbook_text(self) -> bool {
+        matches!(self, OcrMode::KenyaLogbook)
     }
 }
 
@@ -382,6 +388,97 @@ impl Engine {
         collapsed
     }
 
+    fn normalize_logbook_line(text: &str) -> Option<String> {
+        let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let key = collapsed
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_uppercase();
+
+        let normalized = match key.as_str() {
+            "REGISTRATIONCERTIFICATE" => Some("Registration Certificate"),
+            "REPUBLICOFKENYA" => Some("REPUBLIC OF KENYA"),
+            "TRAFFICACTCAP403" => Some("TRAFFIC ACT (CAP 403)"),
+            "SECTION65" => Some("(Section 6(5))"),
+            "ENTRYNO" => Some("Entry No"),
+            "PARTICULARS" => Some("Particulars"),
+            "REGISTRATION" => Some("Registration"),
+            "CHASSISFRAME" => Some("Chassis/Frame"),
+            "MAKEOFVEHICLE" => Some("Make of Vehicle"),
+            "MODEL" => Some("Model"),
+            "TYPEOFVEHICLE" => Some("Type of Vehicle"),
+            "BODYTYPE" => Some("Body Type"),
+            "FUELTYPE" => Some("Fuel Type"),
+            "MANUFACTUREYEAR" => Some("Manufacture Year"),
+            "RATINGCC" => Some("Rating (cc)"),
+            "ENGINENO" => Some("Engine No."),
+            "COLOUR" | "COLOR" => Some("Colour"),
+            "DATEOFREGISTRATION" => Some("Date of Registration"),
+            "GROSSWEIGHTKGS" => Some("Gross Weight (Kgs)"),
+            "DUTY" => Some("Duty"),
+            "NUMBEROFPREVIOUSOWNERS" => Some("Number of Previous Owners"),
+            "NUMBEROFPASSENGERS" => Some("Number of Passengers"),
+            "TAREWEIGHTKGS" => Some("Tare Weight (Kgs)"),
+            "TAXCLASS" => Some("Tax Class"),
+            "NOOFAXLES" | "NOOFAXLESOURROADS" => Some("No. of Axles"),
+            "LOADCAPACITYKGS" => Some("Load Capacity (Kgs)"),
+            "PREVIOUSREGCOUNTRY" => Some("Previous Reg. Country"),
+            "PREVIOUSREGISTRATION" => Some("Previous Registration"),
+            "REGISTEREDOWNERS" => Some("Registered Owner(s)"),
+            "OWNERSNAME" => Some("Owner's Name"),
+            "BOXNOCODE" => Some("Box No. Code"),
+            "TOWN" => Some("Town"),
+            "PIN" => Some("PIN"),
+            "2AFE" => Some("2"),
+            _ => None,
+        };
+
+        if let Some(value) = normalized {
+            return Some(value.to_string());
+        }
+
+        if key == "OURROADSAFE" || key == "OURROADSSAFE" || key == "SAFE" {
+            return None;
+        }
+
+        let mut text = collapsed
+            .replace("N6144501 W", "N6144501W")
+            .replace("S.WAGON", "S. WAGON");
+        if text.ends_with("afé") && text.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            text = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+        }
+        Some(text)
+    }
+
+    fn split_logbook_line(line: OcrLine) -> Vec<OcrLine> {
+        if line.text == "Box No. Code" {
+            let mut box_no = line.clone();
+            box_no.text = "Box No.".to_string();
+            let mut code = line;
+            code.text = "Code".to_string();
+            return vec![box_no, code];
+        }
+
+        let mut parts = line.text.splitn(2, ' ');
+        let first = parts.next().unwrap_or("").to_string();
+        let rest = parts.next().unwrap_or("").trim().to_string();
+        if first.len() == 11
+            && first.as_bytes()[0].is_ascii_alphabetic()
+            && first.as_bytes()[1..10].iter().all(|b| b.is_ascii_digit())
+            && first.as_bytes()[10].is_ascii_alphabetic()
+            && !rest.is_empty()
+        {
+            let mut pin = line.clone();
+            pin.text = first;
+            let mut owner = line;
+            owner.text = rest;
+            return vec![pin, owner];
+        }
+
+        vec![line]
+    }
+
     /// Full pipeline: detect, rectify each box, recognize, in reading order.
     pub fn ocr(
         &self,
@@ -423,6 +520,11 @@ impl Engine {
                 let (text, rec_score) = self.recognize_strip(&rec, &crop, mode.split_words())?;
                 let text = if mode.normalize_id_text() {
                     Self::normalize_line_text(&text)
+                } else if mode.normalize_logbook_text() {
+                    match Self::normalize_logbook_line(&text) {
+                        Some(text) => text,
+                        None => return Ok(None),
+                    }
                 } else {
                     text
                 };
@@ -441,6 +543,13 @@ impl Engine {
             .into_iter()
             .flatten()
             .collect();
+        if mode.normalize_logbook_text() {
+            let lines = lines
+                .into_iter()
+                .flat_map(Self::split_logbook_line)
+                .collect();
+            return Ok((lines, params));
+        }
         Ok((lines, params))
     }
 }

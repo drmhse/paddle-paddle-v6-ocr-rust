@@ -123,9 +123,10 @@ fn parse_mode(mode: Option<&str>) -> Result<OcrMode, (StatusCode, Json<serde_jso
         "general" | "raw" => Ok(OcrMode::General),
         "document" | "doc" => Ok(OcrMode::Document),
         "kenya_id" | "kenya-id" | "id" => Ok(OcrMode::KenyaId),
+        "kenya_logbook" | "kenya-logbook" | "logbook" => Ok(OcrMode::KenyaLogbook),
         other => Err(err(
             StatusCode::BAD_REQUEST,
-            format!("unknown mode '{other}'; available: general, document, kenya_id"),
+            format!("unknown mode '{other}'; available: general, document, kenya_id, kenya_logbook"),
         )),
     }
 }
