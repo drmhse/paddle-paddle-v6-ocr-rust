@@ -5,3 +5,4 @@ test_text.png
 line1.png
 demo-verified.png
 .playwright-mcp/
+models/supra/model.safetensors

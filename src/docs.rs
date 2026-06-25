@@ -83,9 +83,10 @@ pub async fn openapi(State(engine): State<Arc<Engine>>) -> Json<serde_json::Valu
               det_param("unclip_ratio", "box expansion (default: per-model)"),
               {"name": "limit_side_len", "in": "query", "required": false, "schema": {"type": "integer"}, "description": "resize bound, multiple of 32 (default 960)"},
               det_param("min_rec_score", "drop lines below this recognition confidence (default 0)"),
-              {"name": "mode", "in": "query", "required": false, "schema": {"type": "string", "enum": ["general", "document", "kenya_id", "kenya_logbook"], "default": "general"}, "description": "OCR post-processing mode: general=raw, document=padded crops and word splitting, kenya_id=document plus Kenyan ID cleanup, kenya_logbook=document plus Kenyan logbook cleanup"}
+              {"name": "mode", "in": "query", "required": false, "schema": {"type": "string", "enum": ["general", "document", "kenya_id", "kenya_logbook"], "default": "general"}, "description": "OCR post-processing mode: general=raw, document=padded crops and word splitting, kenya_id=document plus Kenyan ID cleanup, kenya_logbook=document plus Kenyan logbook cleanup"},
+              {"name": "understand", "in": "query", "required": false, "schema": {"type": "boolean", "default": false}, "description": "Run the structured-understanding stage (Supra-50M, candle) on the OCR text. Requires a binary built with `--features understanding` and mode=kenya_id; the response then carries a `fields` object keyed by serial_number, id_number, full_names, date_of_birth, sex, district_of_birth, place_of_issue, date_of_issue, each as { value, confidence } where confidence is the model's lowest token probability across that field's value (0-1). Otherwise `fields` is null."}
             ],
-            "responses": {"200": {"description": "extracted text + per-line boxes/scores"}}
+            "responses": {"200": {"description": "extracted text + per-line boxes/scores; plus a structured `fields` object ({value, confidence} per field) when understand=true (else fields is null)"}}
           }
         },
         "/v1/detect": {

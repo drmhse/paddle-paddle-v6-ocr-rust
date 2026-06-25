@@ -68,12 +68,22 @@
       <div><label>min_rec_score</label><input type="number" id="min_rec_score" step="0.05" placeholder="0" /></div>
     </div>
 
+    <label style="display:flex;align-items:center;gap:8px;margin-top:16px;cursor:pointer;">
+      <input type="checkbox" id="understand" style="width:auto;margin:0;" />
+      Understand → structured JSON
+    </label>
+    <div class="meta" id="understandHint">requires <code>--features understanding</code> · kenya_id</div>
+
     <button id="run" disabled>Run OCR</button>
     <div class="err" id="err"></div>
   </section>
 
   <section class="view">
     <canvas id="canvas"></canvas>
+    <div class="out" id="fieldsBox" style="display:none;">
+      <h2>Structured fields (JSON)</h2>
+      <pre class="text" id="fields"></pre>
+    </div>
     <div class="out">
       <h2>Extracted text</h2>
       <div class="text" id="text"></div>
@@ -101,13 +111,16 @@ async function loadModels() {
 loadModels();
 
 function applyModePreset() {
-  if ($('#mode').value === 'general') {
+  const mode = $('#mode').value;
+  if (mode === 'general') {
     $('#unclip_ratio').value = '';
     $('#limit_side_len').value = '';
   } else {
     $('#unclip_ratio').value = '2.2';
     $('#limit_side_len').value = '2048';
   }
+  // understanding is wired for kenya_id; auto-enable there
+  $('#understand').checked = (mode === 'kenya_id');
 }
 $('#mode').onchange = applyModePreset;
 
@@ -143,6 +156,7 @@ function qs() {
   const p = new URLSearchParams();
   p.set('det_model', $('#det').value); p.set('rec_model', $('#rec').value);
   p.set('mode', $('#mode').value);
+  if ($('#understand').checked) p.set('understand', 'true');
   ['box_thresh','thresh','unclip_ratio','limit_side_len','min_rec_score'].forEach(k=>{
     const v = $('#'+k).value; if (v !== '') p.set(k, v);
   });
@@ -159,6 +173,16 @@ $('#run').onclick = async () => {
     draw(j.lines);
     $('#text').textContent = j.text || '(no text)';
     $('#meta').textContent = `${j.num_lines} lines · ${j.elapsed_ms} ms · ${j.mode} · ${j.det_model} + ${j.rec_model}`;
+    // structured fields (understanding stage) — rendered as JSON
+    if (j.fields && typeof j.fields === 'object') {
+      $('#fieldsBox').style.display = '';
+      $('#fields').textContent = JSON.stringify(j.fields, null, 2);
+    } else if ($('#understand').checked) {
+      $('#fieldsBox').style.display = '';
+      $('#fields').textContent = "No fields — server built without --features understanding, or mode isn't kenya_id.";
+    } else {
+      $('#fieldsBox').style.display = 'none';
+    }
     const tb = $('#lines tbody'); tb.innerHTML = '';
     j.lines.forEach((l,i)=>{
       const tr = document.createElement('tr');

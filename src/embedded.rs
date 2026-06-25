@@ -1,33 +1,24 @@
-//! Compile-time embedded models. Selected via cargo features so you can build
-//! a lean single binary (e.g. `--no-default-features --features tiny`).
+//! Per-model metadata, selected via cargo size features (`tiny`/`small`/`medium`).
 //!
-//! Each size feature embeds both the detection and recognition model of that
-//! size. The whole thing is self-contained: no sidecar files at runtime.
+//! The big ONNX weights are no longer embedded — they're fetched on first run
+//! and cached (see `remote.rs`), keyed by model `id`. Only the small text
+//! configs (detection `inference.yml`, recognition `charset.txt`) stay embedded.
 
 pub struct EmbeddedDet {
     pub id: &'static str,
-    pub onnx: &'static [u8],
     pub yml: &'static str,
 }
 
 pub struct EmbeddedRec {
     pub id: &'static str,
-    pub onnx: &'static [u8],
     /// newline-separated character dictionary (without blank/space sentinels)
     pub charset: &'static str,
-}
-
-macro_rules! onnx_file {
-    ($dir:literal) => {
-        include_bytes!(concat!("../models/", $dir, "/inference.onnx"))
-    };
 }
 
 macro_rules! det {
     ($id:literal, $dir:literal) => {
         EmbeddedDet {
             id: $id,
-            onnx: onnx_file!($dir),
             yml: include_str!(concat!("../models/", $dir, "/inference.yml")),
         }
     };
@@ -37,7 +28,6 @@ macro_rules! rec {
     ($id:literal, $dir:literal) => {
         EmbeddedRec {
             id: $id,
-            onnx: onnx_file!($dir),
             charset: include_str!(concat!("../models/", $dir, "/charset.txt")),
         }
     };

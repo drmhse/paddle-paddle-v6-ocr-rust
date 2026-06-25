@@ -168,16 +168,18 @@ impl Engine {
     pub fn load(plan_cache_cap: usize) -> Result<Self> {
         let mut det = BTreeMap::new();
         for m in embedded::det_models() {
-            tracing::info!(model = m.id, "loading detection model (embedded)");
+            let onnx = crate::remote::ensure_bytes(m.id)?;
+            tracing::info!(model = m.id, "loading detection model");
             let cfg = DetConfig::from_yml(m.id, m.yml)?;
-            let compiled = Compiled::from_bytes(m.id, m.onnx, plan_cache_cap)?;
+            let compiled = Compiled::from_bytes(m.id, &onnx, plan_cache_cap)?;
             det.insert(m.id.to_string(), Arc::new(DetModel { cfg, compiled }));
         }
         let mut rec = BTreeMap::new();
         for m in embedded::rec_models() {
-            tracing::info!(model = m.id, "loading recognition model (embedded)");
+            let onnx = crate::remote::ensure_bytes(m.id)?;
+            tracing::info!(model = m.id, "loading recognition model");
             let charset = Charset::from_dict(m.charset);
-            let compiled = Compiled::from_bytes(m.id, m.onnx, plan_cache_cap)?;
+            let compiled = Compiled::from_bytes(m.id, &onnx, plan_cache_cap)?;
             rec.insert(
                 m.id.to_string(),
                 Arc::new(RecModel {

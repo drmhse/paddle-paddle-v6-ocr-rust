@@ -1,14 +1,16 @@
 # ppocr-server
 
-A tiny, **cross-platform**, **single-binary** OCR server for **PP-OCRv6** —
-text **detection + recognition** (full text extraction). Inference runs on
-[`tract`](https://github.com/sonos/tract), a pure-Rust ONNX engine, so there is
-**no ONNX Runtime / C++ dependency** and the models are **embedded into the
-binary** (`include_bytes!`) — no sidecar files at runtime.
+A tiny, **cross-platform**, **lean-binary** OCR server for **PP-OCRv6** — text
+**detection + recognition** (full text extraction). Inference runs on
+[`tract`](https://github.com/sonos/tract), a pure-Rust ONNX engine (no ONNX
+Runtime). Models are **fetched from a CDN on first run and cached locally** —
+the binary is ~25 MB; weights download once and are reused across restarts. See
+[Model cache](#model-cache-first-run).
 
-## Models (embedded, feature-gated by size)
+## Models (fetched on first run, feature-gated by size)
 
-Each size feature embeds the detection **and** recognition model of that size:
+The size feature selects which detection **and** recognition models are
+available (and therefore fetched on first run):
 
 | size feature | det | rec | charset |
 |------|-----|-----|---------|
@@ -16,14 +18,31 @@ Each size feature embeds the detection **and** recognition model of that size:
 | `small`  | PP-OCRv6_small_det (9.5 MB) | PP-OCRv6_small_rec (20 MB)  | 18,708 chars |
 | `medium` | PP-OCRv6_medium_det (59 MB) | PP-OCRv6_medium_rec (73 MB) | 18,708 chars |
 
-`default = ["tiny","small","medium"]` (all). Build a lean binary by selecting
-only what you need:
+`default = ["tiny","small","medium"]` (all). The binary size is the same
+regardless — only the *small* text configs (`inference.yml`, `charset.txt`) are
+embedded; the ONNX weights are fetched. Build with fewer sizes to fetch less on
+first run:
 
 ```bash
-cargo build --release --no-default-features --features tiny           # ~6 MB models
+cargo build --release --no-default-features --features tiny           # fetches ~6 MB on first run
 cargo build --release --no-default-features --features "tiny,small"
-cargo build --release                                                 # all (~168 MB models)
+cargo build --release                                                 # all sizes (~168 MB fetched once)
 ```
+
+## Model cache (first run)
+
+On startup the server ensures each required model is present in its cache,
+downloading from `cdn.drmhse.com` and **verifying SHA-256** if not. Manifest
+(ids, URLs, checksums) lives in [`src/remote.rs`](src/remote.rs).
+
+- **Cache dir**: `$PPOCR_CACHE_DIR`, else `$XDG_CACHE_HOME/ppocr-server/models`,
+  else `~/.cache/ppocr-server/models`. Downloads use a temp file + atomic
+  rename, so a present cache file is always complete + verified — restarts skip
+  re-hashing (cold start ~1 s once cached; ~70 s first run for all sizes).
+- **First run needs network**; subsequent runs are fully offline. For air-gapped
+  deploys, pre-seed the cache dir with `<id>.bin` files (ids from the manifest).
+- To update a model, bump its manifest entry (URL + checksum) and ship a new
+  binary; the new checksum invalidates the old cache file automatically.
 
 ### Precision: why f32 only
 
@@ -38,8 +57,8 @@ with the `tract` engine, f32 wins on every axis except disk size:
 
 tract runtime-dispatches the best f32 SIMD kernels per CPU (it logs e.g. `AMX
 optimisation activated` on Apple Silicon), so f32 is genuinely the fast path.
-To shrink the binary, **trim embedded models** (size features) and/or UPX —
-not precision.
+The binary is lean regardless of precision (weights are fetched, not embedded);
+fewer size features just means less to download on first run.
 
 ## Performance
 
@@ -152,8 +171,73 @@ just linux-arm64        # aarch64-unknown-linux-gnu
 upx --best --lzma target/release/ppocr-server
 upx --best --lzma target/x86_64-unknown-linux-gnu/release/ppocr-server
 ```
-The binary is large because all models are embedded; UPX typically cuts it by
-50–65%. For the smallest artifact, build with fewer size features.
+The binary is ~25 MB (no embedded weights); UPX still cuts the code by ~50%.
+Model weights are fetched on first run, not embedded — see [Model cache](#model-cache-first-run).
+
+## Understanding stage (optional, `--features understanding`)
+
+An optional stage that turns OCR text into structured JSON. It runs a LoRA-fused
+**Supra-50M** model on [`candle`](https://github.com/huggingface/candle)
+(pure-Rust CPU inference); the weights are fetched + cached on first run like the
+OCR models. Off by default, so the plain OCR build is even leaner.
+
+```bash
+just build-understanding       # native, with the feature (no build-time weights)
+just linux-x64-understanding   # cross-compile for the server
+```
+
+Then add `understand=true` on `/v1/ocr` with `mode=kenya_id`:
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/ocr?mode=kenya_id&understand=true\
+&det_model=PP-OCRv6_medium_det&rec_model=PP-OCRv6_medium_rec" \
+  --data-binary @id.jpg -H "Content-Type: application/octet-stream"
+```
+
+The response gains a `fields` object — each field is `{ value, confidence }`
+(confidence = the model's lowest token probability across that value, 0–1). The
+web demo at `/` exposes an "Understand → structured JSON" toggle.
+
+Notes:
+- **No build-time weights.** The 136 MB Supra model is fetched on first run and
+  cached (SHA-256 verified) like the OCR models — see [Model cache](#model-cache-first-run).
+  Only the small tokenizer/config are embedded.
+- **Not pure-Rust.** tokenizers pulls C/C++ deps (onig, esaxx); zig cross-compiles
+  them, and the gnu Linux targets are verified. musl-static is untested.
+- **Resources.** No binary growth (weights fetched); ~136 MB added to the model
+  cache; ~1.2 GB RAM for the loaded model; CPU inference adds ~1 s/request. No GPU.
+- Currently wired for `kenya_id` only.
+
+## Deploy (systemd + nginx)
+
+Cross-compile → copy the binary to the server → run under systemd behind nginx.
+Reference units are in [`deploy/`](deploy/).
+
+```bash
+just linux-x64-understanding                 # or `just linux-x64` for OCR-only
+upx --best --lzma target/x86_64-unknown-linux-gnu/release/ppocr-server   # optional
+scp target/x86_64-unknown-linux-gnu/release/ppocr-server SERVER:/opt/ocr-servos/
+
+# on the server (first time):
+sudo cp deploy/ppocr-server.service /etc/systemd/system/
+sudo cp deploy/ocr-servos.conf /etc/nginx/sites-available/ocr-servos
+sudo ln -sf /etc/nginx/sites-available/ocr-servos /etc/nginx/sites-enabled/
+sudo systemctl daemon-reload && sudo systemctl enable --now ppocr-server
+sudo nginx -t && sudo systemctl reload nginx
+
+# updates:
+sudo systemctl restart ppocr-server
+```
+
+The service binds `127.0.0.1:3088`; nginx proxies `ocr.servos.dev` with a 50 MB
+body limit and 300 s timeouts. Add TLS (e.g. certbot) for production. The
+understanding binary is dynamically linked to glibc — fine on a normal Linux
+host; ensure the box has ≥2 GB RAM.
+
+**First start fetches models.** The unit sets `PPOCR_CACHE_DIR=/opt/ocr-servos/models-cache`;
+the first start downloads the models there (needs outbound network) and caches
+them, so the service may take ~1 min to become ready the first time and starts
+instantly thereafter. Pre-seed that dir to skip the first-run download.
 
 ## Fidelity notes
 

@@ -9,6 +9,9 @@ mod geometry;
 mod postprocess;
 mod preprocess;
 mod recognize;
+mod remote;
+#[cfg(feature = "understanding")]
+mod understanding;
 
 use anyhow::Result;
 use clap::Parser;
@@ -48,6 +51,12 @@ async fn main() -> Result<()> {
 
     let engine = Arc::new(engine::Engine::load(args.plan_cache)?);
     tracing::info!(det = ?engine.det_ids(), rec = ?engine.rec_ids(), "models ready");
+
+    #[cfg(feature = "understanding")]
+    {
+        understanding::init()?;
+        tracing::info!("understanding model ready (Supra-50M, candle)");
+    }
 
     if !args.no_prewarm {
         let e = engine.clone();

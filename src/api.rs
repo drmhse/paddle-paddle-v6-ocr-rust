@@ -105,6 +105,10 @@ struct DetectQuery {
     limit_side_len: Option<u32>,
     min_rec_score: Option<f32>,
     mode: Option<String>,
+    /// When true (and built with `--features understanding`, mode `kenya_id`),
+    /// also run the understanding stage and return a structured `fields` object.
+    #[cfg_attr(not(feature = "understanding"), allow(dead_code))]
+    understand: Option<bool>,
 }
 
 impl DetectQuery {
@@ -372,10 +376,26 @@ async fn ocr(
         })
         .collect();
 
+    #[cfg(feature = "understanding")]
+    let fields: Option<serde_json::Value> =
+        if q.understand.unwrap_or(false) && matches!(mode, OcrMode::KenyaId) {
+            let t = full_text.clone();
+            Some(
+                tokio::task::spawn_blocking(move || crate::understanding::extract(&t))
+                    .await
+                    .unwrap_or(serde_json::Value::Null),
+            )
+        } else {
+            None
+        };
+    #[cfg(not(feature = "understanding"))]
+    let fields: Option<serde_json::Value> = None;
+
     Json(serde_json::json!({
         "det_model": det_model,
         "rec_model": rec_model,
         "mode": mode.as_str(),
+        "fields": fields,
         "image": { "width": width, "height": height },
         "params": {
             "thresh": params.thresh, "box_thresh": params.box_thresh,

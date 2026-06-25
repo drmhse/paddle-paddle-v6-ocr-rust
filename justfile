@@ -51,6 +51,26 @@ add-targets:
       x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
       x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
-# lean builds (fewer embedded models)
+# lean builds (only the requested OCR model sizes are fetched at runtime)
 build-tiny:
     cargo build --release --no-default-features --features tiny
+
+# ---- understanding stage (Supra-50M, candle) ----
+# Adds the kenya_id structured-extraction endpoint. NO build-time weights: all
+# models (OCR + Supra) are fetched on first run and cached (see remote.rs).
+# Pulls C/C++ tokenizer deps, but zig cross-compiles them (gnu targets verified).
+
+build-understanding:
+    cargo build --release --features understanding
+
+run-understanding *ARGS:
+    cargo run --release --features understanding -- {{ARGS}}
+
+linux-x64-understanding:
+    cargo zigbuild --release --features understanding --target x86_64-unknown-linux-gnu
+
+linux-arm64-understanding:
+    cargo zigbuild --release --features understanding --target aarch64-unknown-linux-gnu
+
+macos-arm64-understanding:
+    cargo zigbuild --release --features understanding --target aarch64-apple-darwin

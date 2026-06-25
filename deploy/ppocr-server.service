@@ -9,6 +9,9 @@ User=ck
 Group=ck
 WorkingDirectory=/opt/ocr-servos
 Environment=RUST_LOG=info
+# Models are fetched from the CDN on first run and cached here (persist across
+# restarts so they download only once). Needs network on the very first start.
+Environment=PPOCR_CACHE_DIR=/opt/ocr-servos/models-cache
 ExecStart=/opt/ocr-servos/ppocr-server --host 127.0.0.1 --port 3088 --plan-cache 16
 Restart=on-failure
 RestartSec=3
