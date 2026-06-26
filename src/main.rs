@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
-#[command(name = "ppocr-server", about = "PP-OCRv6 OCR REST API (detection + recognition, embedded models)")]
+#[command(name = "ppocr-server", about = "PP-OCRv6 OCR REST API (detection + recognition, runtime-fetched models)")]
 struct Args {
     /// Bind address.
     #[arg(long, env = "OCR_HOST", default_value = "0.0.0.0")]

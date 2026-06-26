@@ -5,8 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ck
-Group=ck
+# Create a dedicated service user, or replace these with the account that owns
+# /opt/ocr-servos and its model cache.
+User=ppocr
+Group=ppocr
 WorkingDirectory=/opt/ocr-servos
 Environment=RUST_LOG=info
 # Models are fetched from the CDN on first run and cached here (persist across

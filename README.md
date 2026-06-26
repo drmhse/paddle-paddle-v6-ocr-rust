@@ -29,6 +29,10 @@ cargo build --release --no-default-features --features "tiny,small"
 cargo build --release                                                 # all sizes (~168 MB fetched once)
 ```
 
+See [License and model assets](#license-and-model-assets) for the distinction
+between this repository's source code license and the third-party or
+project-specific model files fetched at runtime.
+
 ## Model cache (first run)
 
 On startup the server ensures each required model is present in its cache,
@@ -109,7 +113,7 @@ Env/flags: `--host`/`OCR_HOST`, `--port`/`OCR_PORT`, `--plan-cache`/`OCR_PLAN_CA
 ### `GET /health` → `ok`
 
 ### `GET /v1/models`
-Lists embedded detection models (with default params) and recognition models.
+Lists available detection models (with default params) and recognition models.
 
 ### `POST /v1/ocr` — full text extraction (detect → recognize)
 Body = raw image bytes. Query params (all optional except model selection when
@@ -229,15 +233,40 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo systemctl restart ppocr-server
 ```
 
-The service binds `127.0.0.1:3088`; nginx proxies `ocr.servos.dev` with a 50 MB
-body limit and 300 s timeouts. Add TLS (e.g. certbot) for production. The
-understanding binary is dynamically linked to glibc — fine on a normal Linux
-host; ensure the box has ≥2 GB RAM.
+The example service binds `127.0.0.1:3088`; the example nginx vhost proxies
+`ocr.example.com` with a 50 MB body limit and 300 s timeouts. Replace the
+systemd `User`/`Group`, install path, and `server_name` for your environment.
+Add TLS (for example certbot) for production. The understanding binary is
+dynamically linked to glibc — fine on a normal Linux host; ensure the box has
+≥2 GB RAM.
 
 **First start fetches models.** The unit sets `PPOCR_CACHE_DIR=/opt/ocr-servos/models-cache`;
 the first start downloads the models there (needs outbound network) and caches
 them, so the service may take ~1 min to become ready the first time and starts
 instantly thereafter. Pre-seed that dir to skip the first-run download.
+
+## License and model assets
+
+Source code in this repository is licensed under Apache-2.0; see
+[`LICENSE`](LICENSE).
+
+Model files are fetched at runtime and are not part of the repository source
+license:
+
+- **PP-OCRv6 ONNX weights** are third-party PaddleOCR/PaddlePaddle model
+  artifacts. The CDN URLs in [`src/remote.rs`](src/remote.rs) are a convenience
+  mirror with SHA-256 verification; check the upstream PaddleOCR/PaddlePaddle
+  license and model terms before redistributing or using them commercially.
+- **`supra-kenya-id`** is a project-specific LoRA-fused understanding model
+  served as a runtime artifact. It is not covered by this repository's
+  Apache-2.0 source license unless separate model terms say so.
+- The small `inference.yml`, `charset.txt`, tokenizer, and config files are
+  included so the binary knows how to prepare inputs and decode outputs. Treat
+  them as model metadata and preserve upstream or model-specific notices when
+  redistributing.
+
+If you need different model hosting, edit the manifest in
+[`src/remote.rs`](src/remote.rs), update the SHA-256 checksums, and rebuild.
 
 ## Fidelity notes
 

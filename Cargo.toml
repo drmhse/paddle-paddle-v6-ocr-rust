@@ -2,21 +2,23 @@
 name = "ppocr-server"
 version = "0.1.0"
 edition = "2021"
-description = "Cross-platform PP-OCRv6 OCR REST API (detection + recognition, pure-Rust ONNX via tract, embedded models)"
+description = "Cross-platform PP-OCRv6 OCR REST API with runtime-fetched models and pure-Rust ONNX via tract"
 license = "Apache-2.0"
+repository = "https://github.com/drmhse/paddle-paddle-v6-ocr-rust"
 
 [[bin]]
 name = "ppocr-server"
 path = "src/main.rs"
 
 [features]
-# Each size feature embeds BOTH the detection and recognition model of that size.
+# Each size feature enables BOTH the detection and recognition model of that size.
+# Weights are fetched on first run; only tiny metadata files are embedded.
 default = ["tiny", "small", "medium"]
 tiny = []
 small = []
 medium = []
-# Optional structured-understanding stage: embeds Supra-50M (LoRA-fused) and runs
-# it on candle (pure Rust). Off by default so the OCR-only build stays lean.
+# Optional structured-understanding stage: fetches a LoRA-fused Supra-50M model
+# and runs it on candle. Off by default so the OCR-only build stays lean.
 understanding = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
 
 [dependencies]
