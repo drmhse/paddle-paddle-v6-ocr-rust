@@ -201,6 +201,4 @@ rectify + resize-to-h48, `(x/255−0.5)/0.5` normalize + greedy CTC decode
 `pyclipper` by growing the min-area rectangle (equivalent for DB's rectangular
 boxes). No angle classifier — vertical lines are rotated 90° by aspect ratio.
 
-**License.** Source code is Apache-2.0 ([`LICENSE`](LICENSE)). Runtime-fetched
-model weights (manifest in [`src/remote.rs`](src/remote.rs)) carry their own
-upstream terms.
+**License.** Apache-2.0 ([`LICENSE`](LICENSE)).
