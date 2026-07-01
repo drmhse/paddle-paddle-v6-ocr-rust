@@ -122,6 +122,28 @@ The response gains a `fields` object — each field is `{ value, confidence }`
 (confidence = the model's lowest token probability across that value, 0–1). The
 demo page at `/` has an "Understand → structured JSON" toggle.
 
+### Example
+
+<img src="assets/sample-id.png" alt="sample ID card" width="420">
+
+Running the card above through `mode=kenya_id&understand=true`. Note the raw OCR
+merged the "DATE OF ISSUE" label with the diagonal watermark
+(`DATE OF ISSUEAMPLE ONLY - NOT A VALID ID`) — the understanding model still maps
+every field correctly:
+
+```json
+{
+  "serial_number":     { "value": "880045612",         "confidence": 0.99 },
+  "id_number":         { "value": "40781236",          "confidence": 0.96 },
+  "full_names":        { "value": "AISHA MWAKIO JUMA",  "confidence": 0.87 },
+  "date_of_birth":     { "value": "03.08.1991",         "confidence": 0.89 },
+  "sex":               { "value": "FEMALE",             "confidence": 1.0  },
+  "district_of_birth": { "value": "MOMBASA",            "confidence": 0.93 },
+  "place_of_issue":    { "value": "LIKONI",             "confidence": 0.93 },
+  "date_of_issue":     { "value": "22.04.2014",         "confidence": 0.94 }
+}
+```
+
 - **No build-time weights** — the 136 MB Supra model is fetched + SHA-256-verified
   on first run; only the small tokenizer/config are embedded.
 - **Not pure-Rust** — tokenizers pulls C/C++ deps (onig, esaxx); zig cross-compiles
