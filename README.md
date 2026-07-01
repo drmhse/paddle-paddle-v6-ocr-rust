@@ -124,10 +124,14 @@ demo page at `/` has an "Understand → structured JSON" toggle.
 
 ### Example
 
-<img src="assets/sample-id.png" alt="sample ID card" width="420">
+<p>
+<img src="assets/sample-id.png" alt="sample ID card" width="410">
+<img src="assets/sample-id-detected.png" alt="detected text regions" width="410">
+</p>
 
-Running the card above through `mode=kenya_id&understand=true`. Note the raw OCR
-merged the "DATE OF ISSUE" label with the diagonal watermark
+Left: input. Right: detected text regions (`/v1/ocr` boxes). Running the card
+through `mode=kenya_id&understand=true`. Note the raw OCR merged the "DATE OF
+ISSUE" label with the diagonal watermark
 (`DATE OF ISSUEAMPLE ONLY - NOT A VALID ID`) — the understanding model still maps
 every field correctly:
 
