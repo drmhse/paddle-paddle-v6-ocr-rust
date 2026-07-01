@@ -162,7 +162,7 @@ Binary / startup / footprint (Apple M4, all sizes built):
 ¹ first run fetches ~300 MB (all sizes) from the CDN; network-dependent.
 ² all sizes loaded + prewarmed — build fewer size features for less.
 
-## Build & deploy
+## Build
 
 tract is pure-Rust, so zig cross-compiles cleanly (this Mac arm64, Linux
 x64/arm64):
@@ -176,27 +176,11 @@ just linux-x64                    # or macos-arm64 / linux-arm64
 upx --best --lzma target/x86_64-unknown-linux-gnu/release/ppocr-server   # optional, ~50% off code
 ```
 
-Run under systemd behind nginx (reference units in [`deploy/`](deploy/)):
-
-```bash
-scp target/x86_64-unknown-linux-gnu/release/ppocr-server SERVER:/opt/ocr-servos/
-# first time, on the server:
-sudo cp deploy/ppocr-server.service /etc/systemd/system/
-sudo cp deploy/ocr-servos.conf /etc/nginx/sites-available/ocr-servos
-sudo ln -sf /etc/nginx/sites-available/ocr-servos /etc/nginx/sites-enabled/
-sudo systemctl daemon-reload && sudo systemctl enable --now ppocr-server
-sudo nginx -t && sudo systemctl reload nginx
-# updates: sudo systemctl restart ppocr-server
-```
-
-The example service binds `127.0.0.1:3088`; the example vhost proxies
-`ocr.example.com` (50 MB body limit, 300 s timeouts). Replace the systemd
-`User`/`Group`, install path, and `server_name`; add TLS (e.g. certbot) for
-production. The understanding binary is dynamically linked to glibc — fine on a
-normal Linux host with ≥2 GB RAM. The unit sets
-`PPOCR_CACHE_DIR=/opt/ocr-servos/models-cache`; the **first start fetches models**
-there (needs outbound network, ~1 min) and starts instantly after. Pre-seed that
-dir to skip it.
+The result is a single self-contained binary — copy it to the target host and
+run it. First start needs outbound network to fetch weights (see
+[Models & cache](#models--cache)); the understanding binary is glibc-dynamic and
+wants ≥2 GB RAM. For an example systemd + nginx setup, see
+[`deploy/README.md`](deploy/README.md).
 
 ## Notes & license
 
