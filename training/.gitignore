@@ -1,0 +1,8 @@
+.venv/
+data_*/
+adapters*/
+supra_*/
+models/
+*.log
+__pycache__/
+candle-extract/target/

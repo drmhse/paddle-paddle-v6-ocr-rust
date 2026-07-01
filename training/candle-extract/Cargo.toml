@@ -1,0 +1,15 @@
+[package]
+name = "candle-extract"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+tokenizers = "0.20"
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
