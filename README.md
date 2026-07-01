@@ -201,17 +201,6 @@ rectify + resize-to-h48, `(x/255−0.5)/0.5` normalize + greedy CTC decode
 `pyclipper` by growing the min-area rectangle (equivalent for DB's rectangular
 boxes). No angle classifier — vertical lines are rotated 90° by aspect ratio.
 
-**License.** Source code is Apache-2.0 ([`LICENSE`](LICENSE)). Model files are
-fetched at runtime and are **not** covered by the source license:
-- **PP-OCRv6 ONNX weights** — third-party PaddleOCR/PaddlePaddle artifacts; the
-  CDN URLs in [`src/remote.rs`](src/remote.rs) are a convenience mirror with
-  SHA-256 verification. Check upstream license/model terms before redistributing
-  or using commercially.
-- **`supra-kenya-id`** — a project-specific LoRA-fused model served as a runtime
-  artifact; not covered by this repo's Apache-2.0 license unless separate model
-  terms say so.
-- The small `inference.yml`, `charset.txt`, tokenizer, and config files are
-  embedded model metadata — preserve upstream/model notices when redistributing.
-
-For different model hosting, edit the manifest in
-[`src/remote.rs`](src/remote.rs), update the checksums, and rebuild.
+**License.** Source code is Apache-2.0 ([`LICENSE`](LICENSE)). Runtime-fetched
+model weights (manifest in [`src/remote.rs`](src/remote.rs)) carry their own
+upstream terms.
